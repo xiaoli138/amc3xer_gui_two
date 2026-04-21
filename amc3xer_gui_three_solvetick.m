@@ -1,4 +1,4 @@
-function amc3xer_gui_two
+function amc3xer_gui_three_solvetick
 
     clc;
 
@@ -475,92 +475,122 @@ function amc3xer_gui_two
     function runSequenceTick()
         try
             a = getApp();
-            
-            %确认是否正在运行
+
             if ~a.seqRunning
                 return;
             end
-            
-            %如果请求停止就立即停止序列
+        
             if a.stopFlag
                 stopSequenceInternal('Sequence stopped by user.');
                 return;
             end
-            
+
             steps = getSequenceSteps();
-    
-            if a.currentCycle > a.totalCycles
-                stopSequenceInternal('All cycles completed.');
-                refreshStatus();
-                return;
-            end
-    
-            stepInfo = steps{a.currentStep};
-    
-            %判断当前是不是开始执行步骤的运动
-            if isempty(a.waitingAxis)
-                logMsg(sprintf('Cycle %d/%d started, step %d: %s', ...
-                    a.currentCycle, a.totalCycles, a.currentStep, stepInfo.tag));
-    
-                startMove(stepInfo.axis, stepInfo.dir, stepInfo.len, stepInfo.tag);
-    
+
+            % 关键：同一个 tick 内允许连续推进状态
+            % 这样本步结束后，可以立刻发下一步命令
+            maxTransitions = 8;
+            n = 0;
+
+            while n < maxTransitions
+                n = n + 1;
                 a = getApp();
-                a.waitingAxis = stepInfo.axis;
-                a.currentTag = stepInfo.tag;
-                a.stepStartTime = tic;
-                a.lastMonitorLogTime = tic;
-                a.lastMonitorRunState = [];
-                a.lastMonitorPos = [];
-                setApp(a);
-                return;
-            end
-    
-            % Motion already started -> monitor（监控运动）
-            state = readAxisState(a.edtIP.Value, a.waitingAxis);
-    
-            if ~state.cemg.isNormal
-                error('CEMG invalid during %s. Check emergency-stop wiring.', a.currentTag);
-            end
-    
-            % Timeout protection
-            if ~isempty(a.stepStartTime) && toc(a.stepStartTime) > a.stepTimeoutSec
-                error('%s timeout waiting for stop.', a.currentTag);
-            end
-    
-            % Throttled monitor log
-            needLog = false;
-    
-            if isempty(a.lastMonitorRunState) || state.runState.raw ~= a.lastMonitorRunState
-                needLog = true;
-            end
-    
-            if isempty(a.lastMonitorPos) || abs(double(state.pos) - double(a.lastMonitorPos)) > 1000
-                needLog = true;
-            end
-    
-            if isempty(a.lastMonitorLogTime) || toc(a.lastMonitorLogTime) > 0.5
-                needLog = true;
-            end
-    
-            if needLog
-                logMsg(sprintf('%s monitoring: pos=%u, runState=%s(%d), ioState=%d, CEMG=%s(%d)', ...
-                    a.currentTag, ...
-                    state.pos, ...
-                    state.runState.text, state.runState.raw, ...
-                    state.ioState.raw, ...
-                    state.cemg.text, state.cemg.raw));
-    
-                a = getApp();
-                a.lastMonitorLogTime = tic;
-                a.lastMonitorRunState = state.runState.raw;
-                a.lastMonitorPos = state.pos;
-                setApp(a);
-            end
-    
-            % Stop detected -> go next step
-            if state.runState.raw == 0
+        
+                if ~a.seqRunning
+                    return;
+                end
+        
+                if a.stopFlag
+                    stopSequenceInternal('Sequence stopped by user.');
+                    return;
+                end
+        
+                if a.currentCycle > a.totalCycles
+                    stopSequenceInternal('All cycles completed.');
+                    refreshStatus();
+                    return;
+                end
+        
+                stepInfo = steps{a.currentStep};
+        
+                % =================================================
+                % 状态A：当前没有等待中的轴 -> 立刻发当前步命令
+                % =================================================
+                if isempty(a.waitingAxis)
+                    logMsg(sprintf('Cycle %d/%d started, step %d: %s', ...
+                        a.currentCycle, a.totalCycles, a.currentStep, stepInfo.tag));
+        
+                    startMove(stepInfo.axis, stepInfo.dir, stepInfo.len, stepInfo.tag);
+        
+                    a = getApp();
+                    a.waitingAxis = stepInfo.axis;
+                    a.currentTag = stepInfo.tag;
+                    a.stepStartTime = tic;
+                    a.lastMonitorLogTime = tic;
+                    a.lastMonitorRunState = [];
+                    a.lastMonitorPos = [];
+                    setApp(a);
+        
+                    % 当前 tick 已经把命令发出，后面等下一次 tick 监控运行状态
+                    return;
+                end
+        
+                % =================================================
+                % 状态B：正在等待运动完成 -> 读状态
+                % =================================================
+                state = readAxisState(a.edtIP.Value, a.waitingAxis);
+        
+                if ~state.cemg.isNormal
+                    error('CEMG invalid during %s. Check emergency-stop wiring.', a.currentTag);
+                end
+        
+                if ~isempty(a.stepStartTime) && toc(a.stepStartTime) > a.stepTimeoutSec
+                    error('%s timeout waiting for stop.', a.currentTag);
+                end
+        
+                % 日志节流
+                needLog = false;
+        
+                if isempty(a.lastMonitorRunState) || state.runState.raw ~= a.lastMonitorRunState
+                    needLog = true;
+                end
+        
+                if isempty(a.lastMonitorPos) || abs(double(state.pos) - double(a.lastMonitorPos)) > 1000
+                    needLog = true;
+                end
+        
+                if isempty(a.lastMonitorLogTime) || toc(a.lastMonitorLogTime) > 0.5
+                    needLog = true;
+                end
+        
+                if needLog
+                    logMsg(sprintf('%s monitoring: pos=%u, runState=%s(%d), ioState=%d, CEMG=%s(%d)', ...
+                        a.currentTag, ...
+                        state.pos, ...
+                        state.runState.text, state.runState.raw, ...
+                        state.ioState.raw, ...
+                        state.cemg.text, state.cemg.raw));
+        
+                    a = getApp();
+                    a.lastMonitorLogTime = tic;
+                    a.lastMonitorRunState = state.runState.raw;
+                    a.lastMonitorPos = state.pos;
+                    setApp(a);
+                end
+        
+                % 还没停，本 tick 结束
+                if state.runState.raw ~= 0
+                    return;
+                end
+        
+                % =================================================
+                % 当前步已结束
+                % 注意：这里不 return
+                % 而是立刻推进到下一步，让 while 继续跑
+                % 从而实现“无额外一个 tick 等待”
+                % =================================================
                 logMsg([a.currentTag ' finished.']);
-    
+        
                 a = getApp();
                 a.waitingAxis = [];
                 a.currentTag = '';
@@ -568,8 +598,7 @@ function amc3xer_gui_two
                 a.lastMonitorLogTime = [];
                 a.lastMonitorRunState = [];
                 a.lastMonitorPos = [];
-                
-                %核心运动逻辑
+        
                 if a.currentStep < numel(steps)
                     a.currentStep = a.currentStep + 1;
                 else
@@ -577,9 +606,13 @@ function amc3xer_gui_two
                     a.currentStep = 1;
                     a.currentCycle = a.currentCycle + 1;
                 end
-    
+        
                 setApp(a);
-            end
+        
+                % 故意不 return
+                % while 下一轮会立刻检查下一步
+                % 如果下一步该发命令，会在同一个 tick 里直接发出去
+    end
         catch ME
             stopSequenceInternal(['Sequence error: ' ME.message]);
         end  
@@ -789,5 +822,4 @@ function amc3xer_gui_two
         assert(ismember(round(a.edtCurve.Value), [0 1]), 'Curve must be 0 or 1');
     end
 
-	% 新加的一行注释
 end
